@@ -1,14 +1,14 @@
-import os, requests, time, json, smtplib
+import os, requests, time, json, smtplib, subprocess
 
 API = "https://api.digitalocean.com/v2/droplets"
+HEADERS = {
+    "Authorization": "Bearer %s" %os.environ['TOKEN'],
+    "Content-Type": "application/json"
+}
 DROPLET_NAME = "ol-tester"
 TEST_SCRIPT = "test.sh"
 TEST_OUTPUT = ""
-SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__)
-    HEADERS = {
-        "Authorization": "Bearer %s" % os.environ['TOKEN'],
-        "Content-Type": "application/json"
-    }
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 
 def post(args):
     r = requests.post(API, data=args, headers=HEADERS)
@@ -37,6 +37,7 @@ def lookup(droplet_id):
     return r.json()['droplet']
 
 def kill():
+    global TEST_OUTPUT
     args = {}
     droplets = get(args)['droplets']
     for d in droplets:
@@ -51,7 +52,6 @@ def test():
 
     # create new droplet and wait for it
     droplet = start()['droplet']
-    TEST_OUTPUT += '%s\n' % droplet
 
     while True:
         droplet = lookup(droplet['id'])
@@ -78,24 +78,24 @@ def test():
 
     time.sleep(30) # give SSH some time
 
-    scp = 'scp -o "StrictHostKeyChecking no" %s root@%s:/tmp' % (TEST_SCRIPT, ip)
-    TEST_OUTPUT += 'RUN %s\n' % scp
-    rv = os.system(scp)
+    script_path = os.path.join(SCRIPT_DIR, TEST_SCRIPT)
+    scp = ['/usr/bin/scp', '-o', '"StrictHostKeyChecking no"', script_path, 'root@%s:/tmp' % ip]
+    TEST_OUTPUT += 'RUN %s\n' % ' '.join(scp)
     try:
-        assert(rv == 0)
-    except:
-        TEST_OUTPUT += 'SCP failed. Giving up.\n'
+        TEST_OUTPUT += subprocess.check_output(scp)
+    except subprocess.CalledProcessError as e:
+        TEST_OUTPUT += str(e.output)
+        TEST_OUTPUT += 'SCP with code %s failed. Giving up.\n' % str(e.returncode)
         return False
 
     cmds = 'bash /tmp/%s' % TEST_SCRIPT
-    ssh = 'echo "<CMDS>" | ssh -o "StrictHostKeyChecking no" root@<IP>'
-    ssh = ssh.replace('<CMDS>', cmds).replace('<IP>', ip)
-    TEST_OUTPUT += 'RUN %s\n' % ssh
-    rv = os.system(ssh)
+    ssh = ['/usr/bin/echo', cmds, '|', '/usr/bin/ssh', '-o', '"StrictHostKeyChecking no"', 'root@%s' % ip]
+    TEST_OUTPUT += 'RUN %s\n' % ' '.join(ssh)
     try:
-        assert(rv == 0)
-    except:
-        TEST_OUTPUT += 'SSH command failed. Giving up.\n'
+        TEST_OUTPUT += subprocess.check_output(ssh)
+    except subprocess.CalledProcessError as e:
+        TEST_OUTPUT += str(e.output)
+        TEST_OUTPUT += 'SCP with code %s failed. Giving up.\n' % str(e.returncode)
         return False
 
     # make sure we cleanup everything!
@@ -108,12 +108,15 @@ def scold(commit):
     pw = os.environ['PW']
 
     FROM = user
-    TO = commit['committer']['email']
+    #TO = [commit['committer']['email'], 'tyler.harter@gmail.com', 'ed.nmi.oakes@gmail.com']
+    TO = [commit['committer']['email'], 'ed.nmi.oakes@gmail.com']
     SUBJECT = 'OpenLambda Broken Commit %s' % commit['id']
-    TEXT = 'Your latest commit (sha: %s) failed the automated tests. Please push (or roll back to) a working commit as soon as possible.\n\n
-            If you are unable to fix this or think there\'s an issue with the tests, please contact Ed Oakes (ed.nmi.oakes@gmail.com) or Tyler Harter (tyler.harter@gmail.com) so we can address the issue.\n\n
-            Here is the output of the tests for reference:\n\n%s\n\n
-            <----------------- DO NOT REPLY TO THIS EMAIL ADDRESS ----------------->' % (commit['id'], TEST_OUTPUT)
+    TEXT = """Your latest commit (sha: %s, message: '%s') failed the automated tests. Please push (or roll back to) a working commit as soon as possible.\n\n\
+            If you are unable to fix this or think there's an issue with the tests, please contact Ed Oakes (ed.nmi.oakes@gmail.com) or Tyler Harter (tyler.harter@gmail.com) so we can address the issue.\n\n\
+            Here is the output of the tests for reference:\n\n%s\n\n\
+            <----------------- DO NOT REPLY TO THIS EMAIL ADDRESS ----------------->""" % (commit['id'], commit['message'], TEST_OUTPUT)
+    message = """From: %s\nTo: %s\nSubject:%s\n\n%s
+              """ % (FROM, ', '.join(TO), SUBJECT, TEXT)
 
     try:
         server = smtplib.SMTP('smtp.gmail.com', 587)
@@ -123,18 +126,13 @@ def scold(commit):
         server.sendmail(FROM, TO, message)
         server.close()
         return 'tests failed and successfully sent the email'
-    except:
-        return 'tests failed but couldn\'t send the email'
+    except Exception as e:
+        return 'tests failed but couldn\'t send the email: %s' % e
 
 # aws entry
 def lambda_handler(event, context):
-    token_path = os.path.join(SCRIPT_DIR, 'token.txt')
-
-    with open(token_path, 'r') as fd:
-        token = fd.read().strip()
-
-
     if not test():
         return scold(event['head_commit'])
 
     return 'Tests passed'
+    
