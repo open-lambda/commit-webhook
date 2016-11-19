@@ -5,6 +5,10 @@ DROPLET_NAME = "ol-tester"
 TEST_SCRIPT = "test.sh"
 TEST_OUTPUT = ""
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__)
+    HEADERS = {
+        "Authorization": "Bearer %s" % os.environ['TOKEN'],
+        "Content-Type": "application/json"
+    }
 
 def post(args):
     r = requests.post(API, data=args, headers=HEADERS)
@@ -100,13 +104,11 @@ def test():
     return True
 
 def scold(commit):
-    gmail_path = os.path.join(SCRIPT_DIR, 'gmail.txt')
-    with open(gmail_path. 'r') as fd:
-        user = fd.readline().strip()
-        pw = fd.readline().strip()
+    user = os.environ['EMAIL']
+    pw = os.environ['PW']
 
     FROM = user
-    TO = commit['author']['email']
+    TO = commit['committer']['email']
     SUBJECT = 'OpenLambda Broken Commit %s' % commit['id']
     TEXT = 'Your latest commit (sha: %s) failed the automated tests. Please push (or roll back to) a working commit as soon as possible.\n\n
             If you are unable to fix this or think there\'s an issue with the tests, please contact Ed Oakes (ed.nmi.oakes@gmail.com) or Tyler Harter (tyler.harter@gmail.com) so we can address the issue.\n\n
@@ -131,11 +133,6 @@ def lambda_handler(event, context):
     with open(token_path, 'r') as fd:
         token = fd.read().strip()
 
-    global HEADERS
-    HEADERS = {
-        "Authorization": "Bearer %s" % token,
-        "Content-Type": "application/json"
-    }
 
     if not test():
         return scold(event['head_commit'])
