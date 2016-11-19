@@ -1,0 +1,5 @@
+# commit-webhook
+Invokes lambda function whenever a commit is pushed to run tests
+
+Note:
+Requires 'token.txt' (one line, DigitalOcean API v2 token) and 'gmail.txt' (two lines, username then password) in the 'lambda' directory.
